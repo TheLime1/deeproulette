@@ -45,7 +45,7 @@ _LOGO_ROULETTE = [
     ("╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝   ╚═╝      ╚═╝   ╚══════╝",  "cyan"),
 ]
 
-def show_welcome():
+def show_welcome(robrun_profile=None):
     console.clear()
 
     ROULETTE_W = 68   # width of ROULETTE block (the wider part)
@@ -72,7 +72,7 @@ def show_welcome():
 
     logo.append("\n")
 
-    line1 = "Transformer + BiLSTM Neural Network  •  Real-Time Prediction"
+    line1 = "Three-layer LSTM  •  Roulette research"
     line2 = "━" * 52
     line3 = "v2.0  •  github.com/alaevate/deeproulette  •  2026"
 
@@ -88,6 +88,16 @@ def show_welcome():
         expand=True,
     ))
     console.print()
+    if robrun_profile:
+        console.print(Panel(
+            f"[bold cyan]Your ROB RUN profile is loaded[/bold cyan]\n"
+            f"Training history: {len(robrun_profile.history)} selected consecutive results\n"
+            "Trained checkpoint: loaded; used by Manual Entry for every strategy.\n"
+            "Auto-training updates are saved to this profile for the next launch.\n"
+            "[dim]Archived history remains separate from current results after a 60-second gap.\n"
+            "Experimental labels; predictive accuracy has not been validated.[/dim]",
+            border_style="cyan"))
+
 def ask_strategy() -> type:
     """Show categorised strategy table and return the chosen strategy class."""
     table = Table(
@@ -267,9 +277,9 @@ def ask_auto_train() -> bool:
     """Ask whether to enable online model updates during the session."""
     console.print(Panel(
         "[bold]Step 5 of 5  —  AI Auto-Training[/bold]\n\n"
-        "  When enabled, the AI will learn from each new spin in real time,\n"
-        "  gradually improving its predictions as the session continues.\n\n"
-        "  [dim]This uses slightly more CPU but produces a smarter model over time.\n"
+        "  When enabled, model weights are updated after enough new results arrive.\n"
+        "  Improvement must be measured on later unseen results.\n\n"
+        "  [dim]This uses additional CPU.\n"
         "  The updated model is saved to disk and reused in future sessions.[/dim]",
         border_style="dim",
         padding=(0, 2),
@@ -320,7 +330,7 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
     Confirm.ask("[bold]Press Enter to launch[/bold]", default=True)
 
 
-def run_menu() -> dict:
+def run_menu(robrun_profile=None) -> dict:
     """
     Run all menu steps and return a configuration dict.
 
@@ -333,7 +343,7 @@ def run_menu() -> dict:
           "auto_train":   bool,
         }
     """
-    show_welcome()
+    show_welcome(robrun_profile)
 
     strategy_cls                       = ask_strategy()
     use_live, manual_mode, file_train  = ask_mode()

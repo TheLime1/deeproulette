@@ -31,6 +31,10 @@ from config.settings import (
     LOGS_DIR, DATA_STORE_DIR, TRAINING_FILES_DIR,
 )
 from utils.updater import check_for_updates
+from pathlib import Path
+from data.robrun_profile import load_robrun_profile
+
+APP_ROOT = Path(__file__).resolve().parent
 
 
 def ensure_directories():
@@ -45,6 +49,7 @@ async def run_session(config: dict):
     balance = config["balance"]
     manual = config.get("manual_mode", False)
     use_live = config["use_live"]
+    profile = config.get("robrun_profile") if manual else None
 
     if manual:
         mode_label = "[magenta]✍️ Manual[/magenta]"
@@ -63,7 +68,14 @@ async def run_session(config: dict):
         use_live=use_live,
         spin_interval=config.get("spin_interval", 5.0),
         manual_mode=manual,
+        model_dir=str(profile.active_dir) if profile else None,
+        neural_net=profile.network if profile else None,
     )
+    if profile:
+        engine.history = profile.recent_context()
+        console.print(f"[cyan]ROB RUN trained model loaded; {len(profile.history)} archived training results.[/cyan]")
+        if not engine.history:
+            console.print("[dim]Archived results are over 60 seconds old. Enter 15 new consecutive results to establish current context.[/dim]")
 
     # Manual mode needs stdin so can't use alt-screen Live — use legacy scroll display
     if manual:
@@ -81,6 +93,9 @@ async def run_session(config: dict):
         except (asyncio.CancelledError, KeyboardInterrupt):
             pass
         finally:
+            if profile and engine.training_updates:
+                engine.nn.save()
+                console.print("[cyan]ROB RUN model updates saved for the next launch.[/cyan]")
             if not engine.checkpoint_mode_complete:
                 render_session_summary(engine.tracker, strategy, balance)
         return
@@ -106,11 +121,21 @@ async def run_session(config: dict):
 
 
 def main():
+    os.chdir(APP_ROOT)
     ensure_directories()
+    try:
+        profile = load_robrun_profile(APP_ROOT)
+        if profile:
+            profile.load_network()
+    except Exception as error:
+        console.print(f"[red]Cannot load your ROB RUN profile: {error}[/red]")
+        return
     check_for_updates()
 
     try:
-        config = run_menu()
+        config = run_menu(robrun_profile=profile)
+        if profile and config.get("manual_mode"):
+            config["robrun_profile"] = profile
     except KeyboardInterrupt:
         console.print("\n[bold yellow]  Goodbye![/bold yellow]\n")
         return

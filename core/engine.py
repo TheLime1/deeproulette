@@ -34,6 +34,7 @@ class PredictionEngine:
         manual_mode: bool = False,
         data_feed=None,
         model_dir=None,
+        neural_net=None,
     ):
         self.strategy = strategy
         self.balance = initial_balance
@@ -64,6 +65,7 @@ class PredictionEngine:
 
         self._feed = None
         self.checkpoint_mode_complete = False
+        self.training_updates = 0
 
         # Models are stored per operating mode to avoid cross-contamination
         if model_dir is None:
@@ -74,11 +76,14 @@ class PredictionEngine:
             else:
                 model_dir = SIMULATION_MODELS_DIR
 
-        self.nn = RouletteNeuralNetwork(
-            model_name=strategy.model_filename,
-            save_dir=model_dir,
-        )
-        self.nn.load()
+        if neural_net is None:
+            self.nn = RouletteNeuralNetwork(
+                model_name=strategy.model_filename,
+                save_dir=model_dir,
+            )
+            self.nn.load()
+        else:
+            self.nn = neural_net
 
         # Online trainer writes checkpoints — folder depends on live vs sim
         self.trainer = ModelTrainer(self.nn, verbose=False, save_dir=model_dir)
@@ -136,6 +141,7 @@ class PredictionEngine:
         model_saved = False
         if self.auto_train and len(self.history) >= AUTO_TRAIN_MIN:
             model_saved = self.trainer.train_online(self.history)
+            self.training_updates += 1
 
 
         self._log.info(

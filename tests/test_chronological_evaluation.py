@@ -176,6 +176,19 @@ class EngineCausalityTests(unittest.IsolatedAsyncioTestCase):
         return engine_module.PredictionEngine(FakeStrategy(), 1000.0,
             model_dir=self.temp.name, **kwargs)
 
+    async def test_injected_trained_network_is_used_without_building_another_model(self):
+        network = FakeNN(save_dir=self.temp.name)
+        network.load()
+        engine = self.make_engine(neural_net=network, use_live=False, auto_train=True)
+        self.assertIs(engine.nn, network)
+        self.assertEqual(network.loads, 1)
+        self.assertEqual(len(FakeNN.instances), 1)
+        self.assertIs(engine.trainer.nn, network)
+        self.assertEqual(engine.history, [])
+        for actual in range(20):
+            await engine.handle_spin(actual)
+        self.assertEqual(engine.training_updates, 1)
+
     async def test_first_fifteen_are_unscored_and_target_is_not_an_input(self):
         engine = self.make_engine(use_live=False)
         for actual in range(15):

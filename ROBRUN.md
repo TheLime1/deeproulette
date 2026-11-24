@@ -60,6 +60,14 @@ A streak ends after 60 seconds without a new accepted result, or at an explicit 
 
 `status.json` lists every streak's length and whether it is open. `streak_*.jsonl` retains raw accepted observations and colors, including singletons. **Singleton streaks never enter model input.** On the second result within the timeout, both initial results are released to the streak output's `feed.jsonl`; subsequent results are passed through. Only eligible streaks receive number-only `streak_*.txt` files. Feed that output `feed.jsonl` to `robrun.py --allow-candidates --no-train` for a separate local model process. Boundaries are explicit and each sequence needs sufficient history; fragmented data cannot be treated as one uninterrupted training sequence. Buffered initial entries are historical observations when released.
 
+## Automatic loading in the interactive menu
+
+The interactive `main.py` app reads a private `data_store/robrun/profile.json` registration with `{"version":1,"archive":"archives/YOUR_ARCHIVE"}`. It loads the selected history and the latest completed, hash-checked training checkpoint in that archive, including completed manual training runs. The opening menu confirms the loaded result count. Registrations, training data and weights remain local and ignored by Git.
+
+Choose **Manual Entry** to use that ROB RUN model with any strategy. The model is copied into a separate active profile directory, so auto-training preserves the original training checkpoints. Completed online updates are saved on normal session exit and reused at the next launch. A newly trained archive checkpoint starts a new active copy. Other data-source modes retain their own models.
+
+The archived history is loaded for provenance. If its last result is at least 60 seconds old, it is not replayed into current context or scored as new data: enter 15 new consecutive results to establish current context. This avoids joining across an unknown result gap. Loading trained weights does not establish predictive accuracy. Missing/corrupt registered data or checkpoints produce a visible loading error rather than silently starting a random ROB RUN model.
+
 ## Evaluation correction
 
 The original replay path appended the current result before predicting that result and trained on the same full file it evaluated. The patched engine predicts before appending the current target. File evaluation uses a fresh model and a chronological training prefix/held-out tail, with holdout excluded from fitting. Those changes prevent those particular leakage paths; they do not establish that roulette is predictable.
