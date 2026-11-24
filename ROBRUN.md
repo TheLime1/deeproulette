@@ -64,9 +64,19 @@ A streak ends after 60 seconds without a new accepted result, or at an explicit 
 
 The interactive `main.py` app reads a private `data_store/robrun/profile.json` registration with `{"version":1,"archive":"archives/YOUR_ARCHIVE"}`. It loads the selected history and the latest completed, hash-checked training checkpoint in that archive, including completed manual training runs. The opening menu confirms the loaded result count. Registrations, training data and weights remain local and ignored by Git.
 
-Choose **Manual Entry** to use that ROB RUN model with any strategy. The model is copied into a separate active profile directory, so auto-training preserves the original training checkpoints. Completed online updates are saved on normal session exit and reused at the next launch. A newly trained archive checkpoint starts a new active copy. Other data-source modes retain their own models.
+Choose **ROB RUN QA Live** or **Manual Entry** to use that ROB RUN model with any strategy. The model is copied into a separate active profile directory, so auto-training preserves the original training checkpoints. Completed online updates are saved on normal session exit and reused at the next launch. A newly trained archive checkpoint starts a new active copy. Simulation and file-training modes retain their own models.
 
 The archived history is loaded for provenance. If its last result is at least 60 seconds old, it is not replayed into current context or scored as new data: enter 15 new consecutive results to establish current context. This avoids joining across an unknown result gap. Loading trained weights does not establish predictive accuracy. Missing/corrupt registered data or checkpoints produce a visible loading error rather than silently starting a random ROB RUN model.
+
+## Bundled QA Live collector
+
+Open `python main.py`, choose a strategy, then **[1] ROB RUN QA Live**. The collector uses your running ROB RUN client and its normal connection; open the game in the relevant hub first. A standard Windows consent prompt starts only the capture host. The menu process stays at its original privilege level. Auto-training is off unless you explicitly enable it. Ctrl+C requests cooperative capture cleanup and saves data plus any completed model updates.
+
+The scrolling app displays candidate number/color and streak length. A streak ends after 60 seconds without an accepted result or an explicit source gap. Singletons are archived and withheld from model input. Ambiguous decoder interpretations are quarantined, so a gap in accepted data may split a stream even when the game kept running. Results remain unverified research candidates. After 15 eligible contiguous results, model rankings begin; the app submits no wagers.
+
+Sanitized results, streaks, rankings and status are saved to `data_store/robrun/live-*/`; bounded raw packet evidence stays in ignored `work/roulette-qa/live-*/`. Each capture host stops when its app owner exits. Capture, model and history are separate processes/files so model fitting does not stop the native packet recorder. The old casino WebSocket is no longer a selectable menu Live Mode.
+
+Requirements: Windows x64, Python 3.12, .NET 10, installed ROB RUN and its own `enet.dll`. `ROBRUN_ENET_DLL` and `ROBRUN_DOTNET` override installed-library/runtime discovery. No game binaries are included. On a fresh checkout, build native helpers with `powershell -File outputs/roulette-qa-investigation/Build-QA.ps1`; set `ROBRUN_DOTNET` to a .NET 10 SDK and `ROBRUN_TRACEEVENT_DIR` to an installed TraceEvent assembly directory if needed. These helpers and all runtime data are ignored by Git.
 
 ## Evaluation correction
 

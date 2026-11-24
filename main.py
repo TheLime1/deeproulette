@@ -45,6 +45,10 @@ def ensure_directories():
 
 async def run_session(config: dict):
     """Set up the dashboard + engine, run until Ctrl+C or balance gone."""
+    if config['use_live']:
+        from core.robrun_live import run_qa_live
+        await run_qa_live(APP_ROOT,config)
+        return
     strategy = config["strategy_cls"]()
     balance = config["balance"]
     manual = config.get("manual_mode", False)
@@ -134,7 +138,7 @@ def main():
 
     try:
         config = run_menu(robrun_profile=profile)
-        if profile and config.get("manual_mode"):
+        if profile and (config.get("manual_mode") or config.get('use_live')):
             config["robrun_profile"] = profile
     except KeyboardInterrupt:
         console.print("\n[bold yellow]  Goodbye![/bold yellow]\n")
@@ -152,6 +156,8 @@ def main():
         asyncio.run(run_session(config))
     except KeyboardInterrupt:
         pass
+    except RuntimeError as error:
+        console.print(f'[red]Session could not continue: {error}[/red]')
 
     console.print("[bold yellow]  Thanks for using DeepRoulette![/bold yellow]\n")
 

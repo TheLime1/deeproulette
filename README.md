@@ -56,6 +56,8 @@ This fork fixes current-result leakage in the engine and replaces same-file trai
 
 See **[ROBRUN.md](ROBRUN.md)** for data contracts, output files, quality limits and commands. Binary releases in the upstream instructions below are upstream builds; use the source entry point above for this fork's ROB RUN integration.
 
+The interactive app (`python main.py`) replaces its original casino Live Mode with **[1] ROB RUN QA Live**. It starts the bundled Windows collector, loads the local ROB RUN profile, records 60-second streaks and displays research rankings. A normal Windows consent prompt authorizes only the capture host. Auto-training is optional and off by default; no wagers are submitted. Native helpers must be built locally on a new checkout; see the ROB RUN setup instructions.
+
 ---
 
 ## 🚀 Quick Start — No Tech Knowledge Needed

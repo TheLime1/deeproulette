@@ -39,6 +39,12 @@ roulette_log.txt
 *.backup
 temp/
 runtime/
+work/
+outputs/roulette-qa-investigation/network-observer/receiver/
+outputs/roulette-qa-investigation/network-observer/guid-query/
+outputs/roulette-qa-investigation/network-observer/flush-own-session/
+outputs/roulette-qa-investigation/native-source/**/bin/
+outputs/roulette-qa-investigation/native-source/**/obj/
 *.pcapng
 *.etl
 .env

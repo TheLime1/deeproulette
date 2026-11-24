@@ -92,7 +92,7 @@ def show_welcome(robrun_profile=None):
         console.print(Panel(
             f"[bold cyan]Your ROB RUN profile is loaded[/bold cyan]\n"
             f"Training history: {len(robrun_profile.history)} selected consecutive results\n"
-            "Trained checkpoint: loaded; used by Manual Entry for every strategy.\n"
+            "Trained checkpoint: loaded; used by ROB RUN QA Live and Manual Entry.\n"
             "Auto-training updates are saved to this profile for the next launch.\n"
             "[dim]Archived history remains separate from current results after a 60-second gap.\n"
             "Experimental labels; predictive accuracy has not been validated.[/dim]",
@@ -200,12 +200,12 @@ def ask_bet_amount() -> float:
 
 
 def ask_mode() -> tuple:
-    """Ask whether to use live casino, simulation, or manual entry."""
+    """Choose bundled ROB RUN QA, simulation, manual entry, or file training."""
     console.print(Panel(
         "[bold]Step 4 of 5  —  Data Source[/bold]\n\n"
-        "  [bold cyan][1] Live Mode[/bold cyan]\n"
-        "      Connects to a real Pragmatic Play casino WebSocket.\n"
-        "      [dim]Real spins, real-time. Requires internet connection.[/dim]\n\n"
+        "  [bold cyan][1] ROB RUN QA Live[/bold cyan]\n"
+        "      Starts the bundled passive collector for your running ROB RUN client.\n"
+        "      [dim]Saved ROB RUN model, live candidates and 60-second streaks. Windows capture permission required.[/dim]\n\n"
         "  [bold yellow][2] Simulation Mode[/bold yellow]\n"
         "      Generates random spins locally on your computer.\n"
         "      [dim]No internet needed. Great for testing strategies.[/dim]\n\n"
@@ -223,13 +223,13 @@ def ask_mode() -> tuple:
     choice = Prompt.ask(
         "[bold]Choose mode[/bold]",
         choices=["1", "2", "3", "4"],
-        default="3",
+        default="1",
     )
     use_live    = (choice == "1")
     manual_mode = (choice == "3")
     file_train  = (choice == "4")
     labels = {
-        "1": "[cyan]Live Casino[/cyan]",
+        "1": "[cyan]ROB RUN QA Live[/cyan]",
         "2": "[yellow]Simulation[/yellow]",
         "3": "[magenta]Manual Entry[/magenta]",
         "4": "[green]File Training[/green]",
@@ -302,7 +302,7 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
     if manual_mode:
         mode_label = "[magenta]Manual Entry[/magenta]"
     elif use_live:
-        mode_label = "[cyan]Live Casino[/cyan]"
+        mode_label = "[cyan]ROB RUN QA Live[/cyan]"
     else:
         mode_label = "[yellow]Simulation[/yellow]"
     train_label = "[green]On[/green]" if auto_train else "[dim]Off[/dim]"
@@ -347,6 +347,15 @@ def run_menu(robrun_profile=None) -> dict:
 
     strategy_cls                       = ask_strategy()
     use_live, manual_mode, file_train  = ask_mode()
+
+    if use_live:
+        auto_train=ask_auto_train()
+        console.print(Panel('ROB RUN QA Live will collect local candidates and display research rankings.\n'
+                            'No wagers are submitted. Ctrl+C stops capture and saves the session.',border_style='cyan'))
+        if not Confirm.ask('Start ROB RUN QA Live?',default=True):
+            raise KeyboardInterrupt
+        return {'strategy_cls':strategy_cls,'balance':1.0,'bet_per_number':0.0,'use_live':True,
+                'manual_mode':False,'file_train':False,'auto_train':auto_train,'spin_interval':0}
 
     if file_train:
         # File training only needs the strategy — no balance/bet/speed prompts

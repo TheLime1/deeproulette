@@ -19,7 +19,7 @@ def stamp(value):
 
 
 class StreakRecorder:
-    def __init__(self, folder, timeout=60):
+    def __init__(self, folder, timeout=60, on_feed=None):
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         if any(self.folder.iterdir()):
@@ -29,10 +29,13 @@ class StreakRecorder:
         self.streaks = []
         self.active = None
         self.pending_first = None
+        self.on_feed = on_feed
 
     def append(self, path, row):
         with (self.folder / path).open("a", encoding="utf-8") as output:
             output.write(json.dumps(row, allow_nan=False) + "\n")
+        if path == 'feed.jsonl' and self.on_feed:
+            self.on_feed(dict(row))
 
     def publish(self):
         value = {"updated_utc": dt.datetime.now(UTC).isoformat(), "timeout_seconds": self.timeout,
