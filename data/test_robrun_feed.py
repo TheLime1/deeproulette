@@ -88,6 +88,28 @@ class FeedChecks(unittest.IsolatedAsyncioTestCase):
         feed=self.feed(allow_candidates=True);self.append(event(0,alternativesInMessage=True));await feed.poll_once()
         self.assertEqual(self.calls,[('reset','ambiguous_round')])
 
+    async def test_qa_live_accepts_single_number_alongside_a_numberless_reading(self):
+        def observed(index, number, second_number=None):
+            fields = {'phase': 'rolling', 'phase_end_ts': int(START.timestamp() + 43 * index) * 1000}
+            other = dict(fields)
+            if second_number is not None:
+                other['winning_number'] = second_number
+            return event(index, number, alternativesInMessage=2,
+                         matches=[{'fields': dict(fields, winning_number=number)}, {'fields': other}])
+
+        feed = self.feed(allow_candidates=True, accept_single_numeric_reading=True)
+        twelve = observed(1, 12)
+        self.append(event(0, 28), twelve, twelve, observed(2, 13), observed(3, 7, 32), event(4, 2))
+        await feed.poll_once()
+        self.assertEqual(self.calls, [('number', 28), ('number', 12), ('number', 13),
+                                      ('reset', 'ambiguous_round'), ('number', 2)])
+        self.assertEqual(feed.counters['accepted_single_numeric_reading'], 2)
+        self.assertEqual(feed.counters['duplicates'], 1)
+        self.assertEqual(feed.counters['ambiguous'], 1)
+        accepted = [row for row in self.observations if row['status'] == 'accepted']
+        self.assertEqual(accepted[1]['reason'], 'single_numeric_reading')
+        self.assertEqual(accepted[1]['quality'], 'unverified_candidate')
+
     async def test_cadence_gap_resets_before_number(self):
         feed=self.feed(allow_candidates=True);self.append(event(0),event(2,19));await feed.poll_once()
         self.assertEqual(self.calls,[('number',24),('reset','round_cadence_gap'),('number',19)])

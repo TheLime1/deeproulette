@@ -154,14 +154,14 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
     # Live always starts a new current stream; archived training data is not replayed.
     keyboard = BetInput()
     pipeline=LivePipeline(folder,engine,emit=keyboard.emit)
-    feed=RobrunFeed(events,allow_candidates=True,since=since,poll_interval=.02)
+    feed=RobrunFeed(events,allow_candidates=True,since=since,poll_interval=.02,accept_single_numeric_reading=True)
     feed.on_observation(pipeline.observation)
     runtime=runtime_factory(root,capture_folder)
     pipeline.journal.status.update(state='starting',capture_directory=str(capture_folder),
                                   online_training_enabled=config['auto_train'])
     pipeline.journal.publish()
     print(f'ROB RUN QA LIVE | model: {"saved ROB RUN profile" if profile else "fresh untrained"}',flush=True)
-    print('60-second streak timeout; singleton streaks withheld from model input. Ambiguous candidates are quarantined.',flush=True)
+    print('60-second streak timeout. A single numeric reading counts. Conflicting numbers close the streak.',flush=True)
     print(f'Suggestions start after {SEQUENCE_LENGTH} consecutive results. {BET_HELP}', flush=True)
     print(f'Data: {folder}\nStarting capture. Approve the Windows prompt if shown. Ctrl+C stops and saves.',flush=True)
     started=asyncio.get_running_loop().time()

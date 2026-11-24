@@ -32,6 +32,26 @@ def _microseconds(value):
     return (delta.days*86400+delta.seconds)*1000000+delta.microseconds
 
 
+def _only_numeric_reading(matches, alternatives, number, phase, deadline_us):
+    if (number is None or type(alternatives) is not int or alternatives < 2
+            or not isinstance(matches, list) or len(matches) != alternatives):
+        return False
+    found_number = False
+    for match in matches:
+        fields = match.get('fields') if isinstance(match, dict) else None
+        if not isinstance(fields, dict):
+            return False
+        if 'winning_number' not in fields:
+            continue
+        reading = fields['winning_number']
+        deadline_ms = fields.get('phase_end_ts')
+        if (type(reading) is not int or reading != number or fields.get('phase') != phase
+                or type(deadline_ms) is not int or deadline_ms * 1000 != deadline_us):
+            return False
+        found_number = True
+    return found_number
+
+
 class _JournalTail:
     """Track file identity through exact .1..N bounded rotation siblings."""
     def __init__(self,path,rotation_files,max_read_bytes,max_line_bytes,start_at_end):
@@ -124,15 +144,18 @@ class RobrunFeed:
 
     def __init__(self,path,*,allow_candidates=False,since=None,start_at_end=False,poll_interval=0.1,
                  cadence_seconds=43.0,gap_tolerance_seconds=2.0,max_lateness_seconds=60.0,
-                 rotation_files=4,max_read_bytes=65536,max_line_bytes=262144,max_rounds=4096):
+                 rotation_files=4,max_read_bytes=65536,max_line_bytes=262144,max_rounds=4096,
+                 accept_single_numeric_reading=False):
         raw=os.fspath(path)
         if raw.startswith(('\\\\','//')) or '://' in raw:raise ValueError('A local journal path is required')
-        if type(allow_candidates) is not bool or type(start_at_end) is not bool:raise ValueError('Feed flags must be boolean')
+        if any(type(flag) is not bool for flag in (allow_candidates,start_at_end,accept_single_numeric_reading)):
+            raise ValueError('Feed flags must be boolean')
         for value,minimum,maximum in ((rotation_files,1,16),(max_read_bytes,1024,1048576),(max_line_bytes,1024,4194304),(max_rounds,1,100000)):
             if type(value) is not int or not minimum<=value<=maximum:raise ValueError('Invalid local feed bound')
         for value,minimum,maximum in ((poll_interval,.001,10),(cadence_seconds,1,3600),(gap_tolerance_seconds,0,60),(max_lateness_seconds,0,3600)):
             if type(value) not in (int,float) or not minimum<=value<=maximum:raise ValueError('Invalid feed timing')
         self.path=Path(raw).absolute();self.allow_candidates=allow_candidates
+        self.accept_single_numeric_reading = accept_single_numeric_reading
         self.since=_utc(since) if since is not None else None
         if since is not None and self.since is None:raise ValueError('since must be a timezone-aware ISO timestamp')
         self.poll_interval=float(poll_interval);self.cadence_us=round(cadence_seconds*1000000)
@@ -227,9 +250,14 @@ class RobrunFeed:
         valid_number=number is not None
         trusted=kind!='verified_final_result' or event.get('fieldIdentityVerified') is True and event.get('final') is True
         unambiguous=type(alternatives) is int and alternatives==1
+        selected_numeric_reading = (
+            not unambiguous and kind == 'unverified_candidate' and self.accept_single_numeric_reading
+            and _only_numeric_reading(event.get('matches'), alternatives, number, phase, deadline_us)
+        )
+        admissible_reading = unambiguous or selected_numeric_reading
         if key in self._seen:
             old=self._seen[key]
-            if old is not None and valid_number and unambiguous and trusted and old==number:
+            if old is not None and valid_number and admissible_reading and trusted and old==number:
                 self.counters['duplicates']+=1;await self._observe('duplicate','same_source_round',context);return
             if old is None:
                 self.counters['quarantined']+=1;await self._observe('rejected','quarantined_round',context);return
@@ -245,7 +273,7 @@ class RobrunFeed:
         reason=None
         if not trusted:reason='unverified_final_result';self.counters['unverified_rejected']+=1
         elif not valid_number:reason='invalid_number';self.counters['invalid']+=1
-        elif not unambiguous:reason='ambiguous_round';self.counters['ambiguous']+=1
+        elif not admissible_reading:reason='ambiguous_round';self.counters['ambiguous']+=1
         elif kind=='unverified_candidate' and event.get('phaseExpiredAtDecode') is True or observed is not None and _microseconds(observed)-deadline_us>self.lateness_us:
             reason='late_round';self.counters['late']+=1
         if reason:
@@ -256,7 +284,9 @@ class RobrunFeed:
         self._remember(key,number);self._advance(source,deadline_us)
         self.counters['accepted']+=1
         self.counters['accepted_candidates' if kind=='unverified_candidate' else 'accepted_verified']+=1
-        await self._observe('accepted',context=context)
+        if selected_numeric_reading:
+            self.counters['accepted_single_numeric_reading'] += 1
+        await self._observe('accepted','single_numeric_reading' if selected_numeric_reading else None,context)
         await self._call(self._numbers,number)
 
     async def poll_once(self):
