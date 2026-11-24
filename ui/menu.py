@@ -350,8 +350,9 @@ def run_menu(robrun_profile=None) -> dict:
 
     if use_live:
         auto_train=ask_auto_train()
-        console.print(Panel('ROB RUN QA Live will collect local candidates and display research rankings.\n'
-                            'No wagers are submitted. Ctrl+C stops capture and saves the session.',border_style='cyan'))
+        console.print(Panel('ROB RUN QA Live collects results and shows the next-round suggestion after 15 consecutive results.\n'
+                            'Place bets in the game. Log what you played here, or leave it blank to skip.\n'
+                            'Ctrl+C stops capture and saves the session.',border_style='cyan'))
         if not Confirm.ask('Start ROB RUN QA Live?',default=True):
             raise KeyboardInterrupt
         return {'strategy_cls':strategy_cls,'balance':1.0,'bet_per_number':0.0,'use_live':True,

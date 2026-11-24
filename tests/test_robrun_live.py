@@ -4,6 +4,7 @@ import json
 import os
 import ctypes
 from pathlib import Path
+import sys
 import tempfile
 import types
 import unittest
@@ -13,6 +14,7 @@ from core.robrun_live import LivePipeline
 from data.robrun_feed import RobrunFeed
 from data.qa_capture import CaptureRuntime
 from data.qa_owner import OwnerProcess
+from ui.qa_bet_input import BetInput
 
 BASE=dt.datetime(2026,1,1,tzinfo=dt.timezone.utc)
 
@@ -89,7 +91,7 @@ class LiveChecks(unittest.IsolatedAsyncioTestCase):
             pipeline=LivePipeline(Path(temporary)/'live',engine,emit=messages.append)
             await pipeline.observation(accepted(0))
             self.assertEqual(engine.delivered,[])
-            self.assertIn('UNVERIFIED CANDIDATE: 7 RED',messages[0])
+            self.assertIn('RESULT: 7 RED',messages[0])
             self.assertIn(accepted(0)['observed_at'],messages[0])
             self.assertTrue(any('waiting for a second result' in message for message in messages))
             await pipeline.observation(accepted(43))
@@ -128,6 +130,54 @@ class LiveChecks(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pipeline.journal.status['wagers_submitted'],0)
             rows=[json.loads(line) for line in (root/'live/observations.jsonl').read_text().splitlines()]
             self.assertTrue(any(row.get('reason')=='ambiguous_round' for row in rows))
+
+    async def test_manual_bets_match_once_and_an_empty_round_is_skipped(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary) / 'live'
+            pipeline = LivePipeline(folder, Engine(), emit=lambda _: None)
+            await pipeline.observation(accepted(0))
+            ledger = pipeline.manual_bets
+            entered = accepted(20)['observed_at']
+            ledger.record('bet 17 100', ledger.round_id, entered_at=entered)
+            ledger.record('bet red 200', ledger.round_id, entered_at=entered)
+            await pipeline.observation(accepted(43, 17))
+            await pipeline.observation(accepted(86, 23))
+            rows = [json.loads(line) for line in (folder / 'manual-bets.jsonl').read_text().splitlines()]
+            closes = [row for row in rows if row['event'] == 'round_closed']
+            self.assertEqual([row['status'] for row in closes], ['recorded', 'skipped'])
+            self.assertEqual(closes[0]['matching_bets'], 1)
+            self.assertEqual(closes[0]['result_round_id'], '43')
+            self.assertEqual(closes[1]['bets'], [])
+            self.assertEqual(pipeline.journal.status['wagers_submitted'], 0)
+
+    async def test_late_or_ambiguous_results_do_not_settle_manual_bets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary) / 'live'
+            pipeline = LivePipeline(folder, Engine(), emit=lambda _: None)
+            await pipeline.observation(accepted(0))
+            ledger = pipeline.manual_bets
+            ledger.record('bet 17 100', ledger.round_id, entered_at=accepted(44)['observed_at'])
+            await pipeline.observation(accepted(43, 17))
+            ledger.record('bet 17 100', ledger.round_id, entered_at=accepted(60)['observed_at'])
+            await pipeline.observation({'status': 'reset', 'reason': 'ambiguous_round'})
+            await pipeline.observation(accepted(129, 17))
+            rows = [json.loads(line) for line in (folder / 'manual-bets.jsonl').read_text().splitlines()]
+            closes = [row for row in rows if row['event'] == 'round_closed']
+            self.assertEqual([row['status'] for row in closes], ['unresolved', 'unresolved'])
+            self.assertEqual(closes[1]['reason'], 'ambiguous round')
+
+    async def test_keyboard_discards_an_unsubmitted_draft_when_the_round_changes(self):
+        reader = BetInput()
+        ledger = types.SimpleNamespace(round_id='first', record=lambda *args: self.fail('Stale draft submitted'))
+        keys = list('bet 17 100')
+        keyboard = types.SimpleNamespace(kbhit=lambda: bool(keys), getwch=lambda: keys.pop(0))
+        with patch.object(sys.stdin, 'isatty', return_value=True), patch.dict(sys.modules, {'msvcrt': keyboard}), patch('builtins.print'):
+            reader.poll(ledger)
+            self.assertEqual(reader.draft, 'bet 17 100')
+            ledger.round_id = 'next'
+            keys.append('\r')
+            reader.poll(ledger)
+            self.assertEqual(reader.draft, '')
 
 
 if __name__=='__main__':unittest.main()

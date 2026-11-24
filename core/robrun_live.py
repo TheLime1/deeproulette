@@ -6,10 +6,12 @@ from pathlib import Path
 import uuid
 
 from config.settings import AUTO_TRAIN_MIN, SEQUENCE_LENGTH
+from core.qa_manual_bets import BET_HELP, ManualBetLog
 from data.qa_capture import CaptureRuntime
 from data.robrun_feed import RobrunFeed
 from robrun import RunJournal, score_mode, utcnow
 from streaks import StreakRecorder, RED
+from ui.qa_bet_input import BetInput
 
 
 def result_label(number):
@@ -38,6 +40,7 @@ class LivePipeline:
         self.pending=[]
         self.lock=asyncio.Lock()
         self.streaks=StreakRecorder(self.folder/'streaks-60s',60,on_feed=self.pending.append)
+        self.manual_bets = ManualBetLog(self.journal, self.emit, self.streaks.timeout)
         self.current=None
         self.forecast_utc=None
         self.journal.status.update(mode='robrun_qa_live',quality='unverified_candidate',training_updates=0)
@@ -68,15 +71,16 @@ class LivePipeline:
                        'fieldIdentityVerified':row['quality']=='verified_final_result'}
                 self.streaks.accept(event)
                 active=self.streaks.active
-                quality = 'VERIFIED RESULT' if event['final'] else 'UNVERIFIED CANDIDATE'
-                self.emit(f"[{row['observed_at']}] {quality}: {result_label(row['number'])}")
+                self.emit(f"[{row['observed_at']}] RESULT: {result_label(row['number'])}")
                 self.emit(f"  Phase: {row['phase'] or 'unknown'} | streak #{active['id']}: "
                           f"{active['length']} {'entry' if active['length'] == 1 else 'entries'} | saved to session log")
+                self.manual_bets.observe(row)
                 if active['length'] == 1:
                     self.emit('  Model history: waiting for a second result within 60 seconds.')
                 self.journal.status.update(last_number=row['number'],last_observation_utc=row['observed_at'])
             elif row['status']=='reset':
                 self.streaks.accept({'kind':'journal_gap'})
+                self.manual_bets.close(reason=(row.get('reason') or 'source gap').replace('_', ' '))
                 # Even an unqualified singleton can leave pending context from a
                 # previous model run; explicit reset barriers always clear it.
                 await self.engine.reset_history(row.get('reason'))
@@ -98,7 +102,9 @@ class LivePipeline:
 
     async def tick(self,now=None):
         async with self.lock:
-            self.streaks.expire(now or dt.datetime.now(dt.timezone.utc))
+            now = now or dt.datetime.now(dt.timezone.utc)
+            self.streaks.expire(now)
+            self.manual_bets.expire(now)
             await self.drain()
             self.streaks.publish()
             self.journal.status.update(updated_utc=utcnow(),contiguous_history=len(self.engine.history),
@@ -109,10 +115,12 @@ class LivePipeline:
     def advice(self,result):
         self.forecast_utc=utcnow()
         ranking=[int(n) for n in result['predicted']]
-        self.journal.append('rankings.jsonl',{'generated_utc':self.forecast_utc,'ranking':ranking,
+        selection = result.get('bet_label') or ', '.join(map(str, ranking))
+        self.journal.append('rankings.jsonl',{'generated_utc':self.forecast_utc,'ranking':ranking,'suggested_selection':selection,
             'after_result_received_utc':self.current['receivedUtc'],'trained_checkpoint':self.engine.nn.is_trained(),
             'quality':'unverified_candidate','wager_amount':0})
-        self.emit(f'NEXT OBSERVATION ranking: {ranking} | experimental, uncalibrated | no wagers')
+        self.emit(f'NEXT ROUND SUGGESTION: {selection}')
+        self.emit('  Place bets in the game if you choose. Enter your actual bet here or leave it blank to skip.')
 
     def scored(self,result):
         mode=score_mode(self.current['receivedUtc'],self.forecast_utc)
@@ -144,7 +152,8 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
     engine=PredictionEngine(ResearchStrategy(),1.0,bet_per_number=0.0,auto_train=config['auto_train'],use_live=True,
         model_dir=str(profile.active_dir if profile else folder/'models'),neural_net=profile.network if profile else None)
     # Live always starts a new current stream; archived training data is not replayed.
-    pipeline=LivePipeline(folder,engine,emit=lambda text:print(text,flush=True))
+    keyboard = BetInput()
+    pipeline=LivePipeline(folder,engine,emit=keyboard.emit)
     feed=RobrunFeed(events,allow_candidates=True,since=since,poll_interval=.02)
     feed.on_observation(pipeline.observation)
     runtime=runtime_factory(root,capture_folder)
@@ -153,6 +162,7 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
     pipeline.journal.publish()
     print(f'ROB RUN QA LIVE | model: {"saved ROB RUN profile" if profile else "fresh untrained"}',flush=True)
     print('60-second streak timeout; singleton streaks withheld from model input. Ambiguous candidates are quarantined.',flush=True)
+    print(f'Suggestions start after {SEQUENCE_LENGTH} consecutive results. {BET_HELP}', flush=True)
     print(f'Data: {folder}\nStarting capture. Approve the Windows prompt if shown. Ctrl+C stops and saves.',flush=True)
     started=asyncio.get_running_loop().time()
     last_tick=0
@@ -163,11 +173,12 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
         pipeline.journal.status['state']='collecting'
         while feed.running:
             snapshot = runtime.check() or {}
+            keyboard.poll(pipeline.manual_bets)
             await feed.poll_once()
             now=asyncio.get_running_loop().time()
             phase = snapshot.get('phase')
             if phase != previous_phase or now - last_report >= 15:
-                print(capture_summary(snapshot, feed.counters), flush=True)
+                keyboard.emit(capture_summary(snapshot, feed.counters))
                 previous_phase = phase
                 last_report = now
             if now-last_tick>=.5:
@@ -183,6 +194,7 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
         raise
     finally:
         feed.stop()
+        pipeline.manual_bets.close(reason='app stopped before next result')
         await runtime.stop()
         pipeline.streaks.close('app_stopped',dt.datetime.now(dt.timezone.utc))
         if engine.training_updates:engine.nn.save()
