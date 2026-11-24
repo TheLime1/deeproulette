@@ -81,6 +81,7 @@ class CaptureRuntime:
 
     def check(self):
         if (self.folder/'app-stop.request').exists():return
+        snapshot = {}
         for name in ('console-status.json','driver-state.json'):
             try:state=json.loads((self.folder/name).read_text(encoding='utf-8-sig'))
             except (OSError,ValueError):continue
@@ -88,8 +89,13 @@ class CaptureRuntime:
                 raise RuntimeError(str(state.get('error') or 'QA capture failed'))
             if state.get('phase')=='stopped':
                 raise RuntimeError(f"QA recorder stopped unexpectedly: {state.get('stopReason','unknown reason')}")
+            if name == 'driver-state.json':
+                snapshot['phase'] = state.get('phase')
+            else:
+                snapshot.update({key: state[key] for key in ('packets', 'messages') if key in state})
         if self.process and self.process.returncode is not None:
             raise RuntimeError(f'QA capture host exited ({self.process.returncode}). Check {self.folder / "host.log"}')
+        return snapshot
 
     async def stop(self):
         self.folder.mkdir(parents=True,exist_ok=True)

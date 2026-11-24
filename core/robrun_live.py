@@ -5,10 +5,28 @@ import json
 from pathlib import Path
 import uuid
 
+from config.settings import AUTO_TRAIN_MIN, SEQUENCE_LENGTH
 from data.qa_capture import CaptureRuntime
 from data.robrun_feed import RobrunFeed
 from robrun import RunJournal, score_mode, utcnow
 from streaks import StreakRecorder, RED
+
+
+def result_label(number):
+    if number is None:
+        return 'unknown number'
+    color = 'GREEN' if number == 0 else 'RED' if number in RED else 'BLACK'
+    return f'{number} {color}'
+
+
+def capture_summary(snapshot, counters):
+    phase = snapshot.get('phase')
+    if phase != 'ready':
+        return f"Capture starting ({phase or 'waiting for Windows capture host'})."
+    packets = snapshot.get('packets')
+    traffic = 'waiting for game traffic' if not packets else f"{packets:,} packets, {snapshot.get('messages', 0):,} messages"
+    return (f"Capture ready | {traffic} | number records received: {counters.get('received', 0)} | "
+            f"accepted: {counters.get('accepted', 0)} | ambiguous: {counters.get('ambiguous', 0)}")
 
 
 class LivePipeline:
@@ -40,7 +58,9 @@ class LivePipeline:
     async def observation(self,row):
         async with self.lock:
             self.journal.observation(row)
-            if row['status']=='accepted':
+            accepted = row['status'] == 'accepted'
+            updates_before = self.engine.training_updates
+            if accepted:
                 event={'kind':row['quality'],'number':row['number'],'tableId':row['source_id'],
                        'receivedUtc':row['observed_at'],'phaseEndUtc':row['phaseEndUtc'],
                        'phase':row['phase'],'alternativesInMessage':1,
@@ -48,8 +68,12 @@ class LivePipeline:
                        'fieldIdentityVerified':row['quality']=='verified_final_result'}
                 self.streaks.accept(event)
                 active=self.streaks.active
-                color='green' if row['number']==0 else 'red' if row['number'] in RED else 'black'
-                self.emit(f"RESULT CANDIDATE {row['number']} {color.upper()} | streak {active['id']}: {active['length']} entries | unverified")
+                quality = 'VERIFIED RESULT' if event['final'] else 'UNVERIFIED CANDIDATE'
+                self.emit(f"[{row['observed_at']}] {quality}: {result_label(row['number'])}")
+                self.emit(f"  Phase: {row['phase'] or 'unknown'} | streak #{active['id']}: "
+                          f"{active['length']} {'entry' if active['length'] == 1 else 'entries'} | saved to session log")
+                if active['length'] == 1:
+                    self.emit('  Model history: waiting for a second result within 60 seconds.')
                 self.journal.status.update(last_number=row['number'],last_observation_utc=row['observed_at'])
             elif row['status']=='reset':
                 self.streaks.accept({'kind':'journal_gap'})
@@ -58,8 +82,19 @@ class LivePipeline:
                 await self.engine.reset_history(row.get('reason'))
                 self.forecast_utc=None
             elif row['status']=='rejected' and row.get('reason')!='before_since_or_missing_timestamp':
-                self.emit(f"QUARANTINED: {row.get('reason')} | no model label accepted")
+                receipt = row.get('observed_at') or 'time unavailable'
+                reason = (row.get('reason') or 'unknown').replace('_', ' ')
+                self.emit(f"[{receipt}] QUARANTINED: {result_label(row.get('number'))} | {reason} | excluded from model history")
             await self.drain()
+            if accepted and active['length'] >= 2:
+                history_size = len(self.engine.history)
+                added = 'first two results added' if active['length'] == 2 else 'result added'
+                context = f'{history_size}/{SEQUENCE_LENGTH} consecutive results' if history_size < SEQUENCE_LENGTH else f'{history_size} consecutive results, context ready'
+                self.emit(f'  Model history: {added} | {context}')
+                if self.engine.training_updates > updates_before:
+                    self.emit(f'  Auto-training: update #{self.engine.training_updates} completed.')
+                elif self.engine.auto_train and history_size < AUTO_TRAIN_MIN:
+                    self.emit(f'  Auto-training: {history_size}/{AUTO_TRAIN_MIN} consecutive results needed for an update.')
 
     async def tick(self,now=None):
         async with self.lock:
@@ -118,16 +153,23 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
     pipeline.journal.publish()
     print(f'ROB RUN QA LIVE | model: {"saved ROB RUN profile" if profile else "fresh untrained"}',flush=True)
     print('60-second streak timeout; singleton streaks withheld from model input. Ambiguous candidates are quarantined.',flush=True)
-    print(f'Data: {folder}\nWaiting for the game connection. Windows may request capture permission. Ctrl+C stops and saves.',flush=True)
+    print(f'Data: {folder}\nStarting capture. Approve the Windows prompt if shown. Ctrl+C stops and saves.',flush=True)
     started=asyncio.get_running_loop().time()
     last_tick=0
+    last_report = started
+    previous_phase = None
     try:
         await runtime.start()
         pipeline.journal.status['state']='collecting'
         while feed.running:
-            runtime.check()
+            snapshot = runtime.check() or {}
             await feed.poll_once()
             now=asyncio.get_running_loop().time()
+            phase = snapshot.get('phase')
+            if phase != previous_phase or now - last_report >= 15:
+                print(capture_summary(snapshot, feed.counters), flush=True)
+                previous_phase = phase
+                last_report = now
             if now-last_tick>=.5:
                 pipeline.journal.status['feed_counts']=dict(feed.counters)
                 await pipeline.tick()

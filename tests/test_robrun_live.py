@@ -21,6 +21,7 @@ class Engine:
     def __init__(self):
         self.history=[]
         self.training_updates=0
+        self.auto_train=True
         self.delivered=[]
         self.resets=[]
         self.nn=types.SimpleNamespace(is_trained=lambda:True)
@@ -84,11 +85,16 @@ class LiveChecks(unittest.IsolatedAsyncioTestCase):
     async def test_first_result_is_withheld_and_timeout_clears_context(self):
         with tempfile.TemporaryDirectory() as temporary:
             engine=Engine()
-            pipeline=LivePipeline(Path(temporary)/'live',engine,emit=lambda _:None)
+            messages=[]
+            pipeline=LivePipeline(Path(temporary)/'live',engine,emit=messages.append)
             await pipeline.observation(accepted(0))
             self.assertEqual(engine.delivered,[])
+            self.assertIn('UNVERIFIED CANDIDATE: 7 RED',messages[0])
+            self.assertIn(accepted(0)['observed_at'],messages[0])
+            self.assertTrue(any('waiting for a second result' in message for message in messages))
             await pipeline.observation(accepted(43))
             self.assertEqual(engine.delivered,[7,7])
+            self.assertTrue(any('first two results added' in message and '2/15' in message for message in messages))
             await pipeline.tick(BASE+dt.timedelta(seconds=102))
             self.assertEqual(engine.history,[7,7])
             await pipeline.tick(BASE+dt.timedelta(seconds=103))
