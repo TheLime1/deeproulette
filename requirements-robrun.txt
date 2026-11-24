@@ -1,0 +1,3 @@
+# Tested local Windows CPU runtime: Python 3.12, TensorFlow 2.21.
+-r requirements.txt
+tensorflow==2.21.0

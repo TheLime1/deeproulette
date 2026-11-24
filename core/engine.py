@@ -32,6 +32,8 @@ class PredictionEngine:
         use_live: bool = True,
         spin_interval: float = 5.0,
         manual_mode: bool = False,
+        data_feed=None,
+        model_dir=None,
     ):
         self.strategy = strategy
         self.balance = initial_balance
@@ -41,6 +43,7 @@ class PredictionEngine:
         self.use_live = use_live
         self.spin_interval = spin_interval
         self.manual_mode = manual_mode
+        self.data_feed = data_feed
 
         self.history = []
         self.tracker = StatsTracker()
@@ -50,6 +53,7 @@ class PredictionEngine:
         self._pending_predicted = None
         self._pending_bets = None
         self._pending_probs = None
+        self._pending_history = None
 
         self.on_spin_complete = None
         self.on_waiting = None
@@ -62,12 +66,13 @@ class PredictionEngine:
         self.checkpoint_mode_complete = False
 
         # Models are stored per operating mode to avoid cross-contamination
-        if manual_mode:
-            model_dir = MANUAL_MODELS_DIR
-        elif use_live:
-            model_dir = LIVE_MODELS_DIR
-        else:
-            model_dir = SIMULATION_MODELS_DIR
+        if model_dir is None:
+            if manual_mode:
+                model_dir = MANUAL_MODELS_DIR
+            elif use_live:
+                model_dir = LIVE_MODELS_DIR
+            else:
+                model_dir = SIMULATION_MODELS_DIR
 
         self.nn = RouletteNeuralNetwork(
             model_name=strategy.model_filename,
@@ -90,32 +95,28 @@ class PredictionEngine:
         if not self._running:
             return
 
-        # Append and trim history
-        self.history.append(number)
-        if len(self.history) > MAX_HISTORY:
-            self.history = self.history[-MAX_HISTORY:]
-
-        # Need at least SEQUENCE_LENGTH spins before predicting
+        # The current result is a target, never an input to its own prediction.
+        # The first SEQUENCE_LENGTH observations only establish past context.
         if len(self.history) < SEQUENCE_LENGTH:
+            self._append_history(number)
             if self.on_waiting and self.use_live:
-                # Sim/manual waiting is shown by show_advice (before_spin hook)
                 self.on_waiting(len(self.history), SEQUENCE_LENGTH)
+            if self.use_live and len(self.history) == SEQUENCE_LENGTH:
+                await self.show_advice()
             return
 
-
-        if self._pending_predicted is not None:
+        if (self._pending_predicted is not None
+                and self._pending_history == tuple(self.history[-SEQUENCE_LENGTH:])):
             # Reuse prediction from show_advice() so the user sees the same numbers
             predicted               = self._pending_predicted
             bets = self._pending_bets
             probabilities = self._pending_probs
-            self._pending_predicted = None
-            self._pending_bets = None
-            self._pending_probs = None
         else:
             input_tensor = RouletteNeuralNetwork.build_prediction_input(self.history)
             probabilities = self.nn.model.predict(input_tensor, verbose=0)[0]
             predicted = self.strategy.select_numbers(probabilities)
             bets = self.strategy.calculate_bets(predicted, self.balance, self.bet_per_number)
+        self._clear_pending()
 
         total_bet = sum(bets.values())
 
@@ -128,6 +129,9 @@ class PredictionEngine:
 
         self.tracker.record(number, predicted, bets, is_win, net, self.balance)
 
+        # Only after scoring may the revealed result enter future context and
+        # optional online training. This preserves chronological evaluation.
+        self._append_history(number)
 
         model_saved = False
         if self.auto_train and len(self.history) >= AUTO_TRAIN_MIN:
@@ -186,6 +190,28 @@ class PredictionEngine:
         if self.use_live and self._running:
             await self.show_advice()
 
+    def _append_history(self, number):
+        self.history.append(number)
+        if len(self.history) > MAX_HISTORY:
+            self.history = self.history[-MAX_HISTORY:]
+
+    def _clear_pending(self):
+        self._pending_predicted = None
+        self._pending_bets = None
+        self._pending_probs = None
+        self._pending_history = None
+
+    async def reset_history(self, reason=None):
+        """Discard prediction context after a source gap or session change.
+
+        Paper statistics remain accumulated; the next SEQUENCE_LENGTH results
+        are unscored warmup observations from the newly contiguous source.
+        """
+        self.history.clear()
+        self._clear_pending()
+        self._log.info("Prediction context reset after a source discontinuity.")
+        if self.on_waiting:
+            self.on_waiting(0, SEQUENCE_LENGTH)
 
     async def show_advice(self):
         """Compute AI recommendation and fire the on_advice callback."""
@@ -194,9 +220,7 @@ class PredictionEngine:
         if len(self.history) < SEQUENCE_LENGTH:
             if self.on_waiting and not self.use_live:
                 self.on_waiting(len(self.history), SEQUENCE_LENGTH)
-            self._pending_predicted = None
-            self._pending_bets = None
-            self._pending_probs = None
+            self._clear_pending()
             return
 
         input_tensor = RouletteNeuralNetwork.build_prediction_input(self.history)
@@ -207,6 +231,7 @@ class PredictionEngine:
         self._pending_predicted = predicted
         self._pending_bets = bets
         self._pending_probs = probabilities
+        self._pending_history = tuple(self.history[-SEQUENCE_LENGTH:])
 
         if self.on_advice:
             self.on_advice({
@@ -222,7 +247,13 @@ class PredictionEngine:
         """Start the engine using the configured data source."""
         self.report_model_status()
 
-        if self.manual_mode:
+        if self.data_feed is not None:
+            feed = self.data_feed
+            self._feed = feed
+            feed.on_number(self.handle_spin)
+            feed.on_reset(self.reset_history)
+            await feed.listen()
+        elif self.manual_mode:
             from data.manual_feed import ManualFeed
             feed = ManualFeed()
             self._feed = feed

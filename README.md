@@ -4,7 +4,7 @@
   DeepRoulette
 </h1>
 
-<h4 align="center">Transformer + BiLSTM roulette predictor<br>real-time learning, inside & outside bets, works with any table.</h4>
+<h4 align="center">LSTM roulette research tool<br>local ROB RUN observations, manual input and upstream feed modes.</h4>
 
 <p align="center">
   <a href="https://github.com/alaevate/deeproulette/issues">
@@ -39,6 +39,22 @@
 > Roulette is a game of pure chance. The house always has an edge.
 > No AI system can guarantee wins. Never gamble with money you cannot afford to lose.
 > Always gamble responsibly.
+
+## ROB RUN integration in this fork
+
+Use `robrun.py` to read an existing **local** ROB RUN recorder JSONL file. This entry point makes no casino connection and submits no wagers. Other players' bets are not required: the current model uses the previous 15 winning numbers only.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-robrun.txt
+.\.venv\Scripts\python.exe robrun.py --events 'C:\path\to\realtime-events-v2.jsonl' --driver-state 'C:\path\to\driver-state.json' --allow-candidates
+```
+
+Use Python 3.12 for the tested Windows CPU environment. `--allow-candidates` explicitly enables experimental, **unverified** recorder hypotheses; the default accepts independently verified final-result records only. Ambiguity and missing rounds reset history. A candidate feed is not a confirmed complete spin history or evidence of prediction accuracy.
+
+This fork fixes current-result leakage in the engine and replaces same-file training/replay scores with chronological held-out file evaluation. ROB RUN runtime data and source-specific models stay under ignored `data_store/robrun/`; they are separate from upstream casino models. Historical startup replay is labeled separately from live observations.
+
+See **[ROBRUN.md](ROBRUN.md)** for data contracts, output files, quality limits and commands. Binary releases in the upstream instructions below are upstream builds; use the source entry point above for this fork's ROB RUN integration.
 
 ---
 
@@ -133,7 +149,7 @@ Choose a strategy in the interactive menu. Strategies are split into three categ
        │
        ├── [History buffer]  Collects the last 15 spin results
        │
-      ├── [Neural Network]  Hybrid Transformer + BiLSTM → outputs a probability
+      ├── [Neural Network]  Three LSTM layers → outputs a model score
        │                     for each of the 37 possible numbers
        │
        ├── [Strategy]        Picks the top N numbers by probability
@@ -146,17 +162,17 @@ Choose a strategy in the interactive menu. Strategies are split into three categ
        ├── [Statistics]      Updates win rate, ROI, streak
        │
        └── [Auto-train]      (if enabled) Re-trains the model on
-                             recent history — model improves over time
+                             recent history; improvement requires evaluation
 ```
 
 ### The AI Model
 
-- **Architecture**: Transformer attention block + bidirectional LSTM stack + dense head
-- **Input**: Last 15 spins with engineered features (number, color, parity, range, dozen, column)
+- **Architecture in the current code**: Three LSTM layers + dense head
+- **Input**: Last 15 winning numbers, normalized to a scalar feature per spin
 - **Output**: Probability distribution over all 37 numbers (0–36)
-- **Training**: Label-smoothed categorical cross-entropy, Adam optimizer, early stopping
-- **Online learning**: Optional — model updates after every spin using recent 150 results
-- **Model storage**: Separate directories per mode — `saved_models/manual/`, `saved_models/simulation/`, `saved_models/live/`
+- **Training**: Categorical cross-entropy, Adam optimizer, early stopping
+- **Online learning**: Optional weight updates using recent results; predictive improvement requires independent evaluation
+- **Model storage**: Legacy modes use the paths in `config/settings.py`; ROB RUN runs use separate per-run/per-source directories described in `ROBRUN.md`.
 
 ---
 

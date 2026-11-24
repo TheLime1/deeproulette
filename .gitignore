@@ -38,6 +38,11 @@ Thumbs.db
 roulette_log.txt
 *.backup
 temp/
+runtime/
+*.pcapng
+*.etl
+.env
+.env.*
 RELEASES.md
 ISSUE_TAGS.md
 /todo.md
