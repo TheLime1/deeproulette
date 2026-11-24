@@ -66,7 +66,9 @@ The interactive `main.py` app reads a private `data_store/robrun/profile.json` r
 
 Choose **ROB RUN QA Live** or **Manual Entry** to use that ROB RUN model with any strategy. The model is copied into a separate active profile directory, so auto-training preserves the original training checkpoints. Completed online updates are saved on normal session exit and reused at the next launch. A newly trained archive checkpoint starts a new active copy. Simulation and file-training modes retain their own models.
 
-The archived history is loaded for provenance. If its last result is at least 60 seconds old, it is not replayed into current context or scored as new data: enter 15 new consecutive results to establish current context. This avoids joining across an unknown result gap. Loading trained weights does not establish predictive accuracy. Missing/corrupt registered data or checkpoints produce a visible loading error rather than silently starting a random ROB RUN model.
+**Fast Start** is offered in QA Live and Manual Entry when a saved streak contains at least 15 results. It uses the last 15 results of the newest eligible local streak or training archive, regardless of age. This lets the loaded model show a suggestion immediately. New consecutive results gradually replace the saved inputs. Scoring and auto-training use fresh consecutive results only. Choose `n` at the Fast Start prompt for a fresh warmup.
+
+QA Live accepts results decoded after the rolling phase once they pass the usual source, order and receipt-time checks. The 60-second streak boundary applies to consecutive new observations. Missing or corrupt registered data or checkpoints produce a loading error.
 
 ## Bundled QA Live collector
 

@@ -130,6 +130,14 @@ class FeedChecks(unittest.IsolatedAsyncioTestCase):
         await feed.poll_once()
         self.assertEqual(self.calls,[('reset','late_round'),('reset','late_round'),('number',19)])
 
+    async def test_qa_live_accepts_delayed_decode_within_receipt_bound(self):
+        feed = self.feed(allow_candidates=True, allow_expired_candidates=True)
+        self.append(event(0, 12, phaseExpiredAtDecode=True),
+                    event(1, 13, phaseExpiredAtDecode=True, receivedUtc=(START+timedelta(seconds=104)).isoformat()))
+        await feed.poll_once()
+        self.assertEqual(self.calls, [('number', 12), ('reset', 'late_round')])
+        self.assertTrue(next(row for row in self.observations if row['status']=='accepted')['phase_expired_at_decode'])
+
     async def test_since_filter_uses_recorded_aware_timestamp(self):
         feed=self.feed(allow_candidates=True,since=START)
         self.append(event(0),event(1,19),event(2,receivedUtc=None));await feed.poll_once()

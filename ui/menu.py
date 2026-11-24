@@ -295,7 +295,8 @@ def ask_auto_train() -> bool:
     return enabled
 
 
-def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live: bool, auto_train: bool, spin_interval: float = 5.0, manual_mode: bool = False):
+def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live: bool, auto_train: bool,
+                      spin_interval: float = 5.0, manual_mode: bool = False, fast_start: bool = False):
     """Display a summary of all chosen settings before launching."""
     s          = strategy_cls()
     risk_color = _RISK_COLOUR.get(s.RISK_LEVEL, "white")
@@ -313,6 +314,7 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
         f"{spin_interval}s"
     )
     speed_line = "" if (use_live or manual_mode) else f"\n  Sim Speed  :  [bold cyan]{speed_label}[/bold cyan]"
+    history_line = "\n  Fast Start :  [green]On[/green]" if fast_start else ""
 
     console.print(Panel(
         f"  [bold green]All set! Here's your configuration:[/bold green]\n\n"
@@ -321,7 +323,7 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
         f"  Balance    :  [bold yellow]${balance:.2f}[/bold yellow]\n"
         f"  Bet/Number :  [bold yellow]${bet_amount:.2f}[/bold yellow]\n"
         f"  Mode       :  {mode_label}{speed_line}\n"
-        f"  Auto-Train :  {train_label}",
+        f"  Auto-Train :  {train_label}{history_line}",
         title="[bold cyan]Ready to Start[/bold cyan]",
         border_style="green",
         padding=(0, 2),
@@ -331,7 +333,7 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
         raise KeyboardInterrupt
 
 
-def run_menu(robrun_profile=None) -> dict:
+def run_menu(robrun_profile=None, saved_context=None) -> dict:
     """
     Run all menu steps and return a configuration dict.
 
@@ -377,8 +379,13 @@ def run_menu(robrun_profile=None) -> dict:
     bet_amount            = ask_bet_amount()
     spin_interval         = 5.0 if (use_live or manual_mode) else ask_sim_speed()
     auto_train            = ask_auto_train()
+    fast_start = None
+    if saved_context and (use_live or manual_mode):
+        if Confirm.ask(f'Fast Start with {len(saved_context.numbers)} saved results?', default=True):
+            fast_start = saved_context
 
-    show_confirmation(strategy_cls, balance, bet_amount, use_live, auto_train, spin_interval, manual_mode)
+    show_confirmation(strategy_cls, balance, bet_amount, use_live, auto_train, spin_interval, manual_mode,
+                      fast_start=fast_start is not None)
 
     return {
         "strategy_cls":   strategy_cls,
@@ -389,4 +396,5 @@ def run_menu(robrun_profile=None) -> dict:
         "auto_train":     auto_train,
         "spin_interval":  spin_interval,
         "file_train":     False,
+        "saved_context":   fast_start,
     }

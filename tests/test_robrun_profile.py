@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from data.robrun_profile import load_robrun_profile, sha256
+from data.robrun_profile import find_saved_context, load_robrun_profile, sha256
 
 
 class ProfileTests(unittest.TestCase):
@@ -58,6 +58,22 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(profile.recent_context(base + dt.timedelta(seconds=60)), [])
         self.assertEqual(profile.recent_context(base - dt.timedelta(seconds=1)), [])
         self.assertEqual(profile.history, self.numbers)
+
+    def test_fast_start_uses_newest_eligible_streak_and_falls_back_to_archive(self):
+        profile = load_robrun_profile(self.root)
+        saved = find_saved_context(self.root, profile)
+        self.assertEqual(saved.numbers, tuple(self.numbers[-15:]))
+        directory = self.private / 'live-fixture' / 'streaks-60s'
+        self.write(directory / 'status.json', {'streaks': [
+            {'id': 1, 'length': 17, 'last_result_utc': '2026-01-02T00:00:00Z'},
+            {'id': 2, 'length': 30, 'last_result_utc': '2026-01-03T00:00:00Z'},
+            {'id': 3, 'length': 14, 'last_result_utc': '2026-01-04T00:00:00Z'},
+        ]})
+        (directory / 'streak_00001.txt').write_text('\n'.join(map(str, range(17))) + '\n')
+        (directory / 'streak_00002.txt').write_text('1\n')
+        saved = find_saved_context(self.root, profile)
+        self.assertEqual(saved.numbers, tuple(range(2, 17)))
+        self.assertEqual(saved.source, 'live-fixture, streak 1')
 
     def test_changed_training_data_and_changed_model_fail_clearly(self):
         path = self.archive / 'selected-26.txt'

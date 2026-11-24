@@ -47,6 +47,7 @@ class PredictionEngine:
         self.data_feed = data_feed
 
         self.history = []
+        self.saved_context = ()
         self.tracker = StatsTracker()
         self._log = setup_logger()
         self._running = True
@@ -223,21 +224,26 @@ class PredictionEngine:
         """Compute AI recommendation and fire the on_advice callback."""
         if not self._running:
             return
-        if len(self.history) < SEQUENCE_LENGTH:
+        uses_saved_context = len(self.history) < SEQUENCE_LENGTH and len(self.saved_context) >= SEQUENCE_LENGTH
+        if len(self.history) < SEQUENCE_LENGTH and not uses_saved_context:
             if self.on_waiting and not self.use_live:
                 self.on_waiting(len(self.history), SEQUENCE_LENGTH)
             self._clear_pending()
             return
 
-        input_tensor = RouletteNeuralNetwork.build_prediction_input(self.history)
+        history = [*self.saved_context, *self.history] if uses_saved_context else self.history
+        input_tensor = RouletteNeuralNetwork.build_prediction_input(history)
         probabilities = self.nn.model.predict(input_tensor, verbose=0)[0]
         predicted = self.strategy.select_numbers(probabilities)
         bets = self.strategy.calculate_bets(predicted, self.balance, self.bet_per_number)
 
-        self._pending_predicted = predicted
-        self._pending_bets = bets
-        self._pending_probs = probabilities
-        self._pending_history = tuple(self.history[-SEQUENCE_LENGTH:])
+        if uses_saved_context:
+            self._clear_pending()
+        else:
+            self._pending_predicted = predicted
+            self._pending_bets = bets
+            self._pending_probs = probabilities
+            self._pending_history = tuple(self.history[-SEQUENCE_LENGTH:])
 
         if self.on_advice:
             self.on_advice({
@@ -247,6 +253,7 @@ class PredictionEngine:
                 "probabilities": probabilities,
                 "spin_num":      self.tracker.total_spins + 1,
                 "bet_label":     self.strategy.get_display_label(),
+                "uses_saved_context": uses_saved_context,
             })
 
     async def run(self):

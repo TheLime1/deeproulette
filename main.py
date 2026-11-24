@@ -32,7 +32,7 @@ from config.settings import (
 )
 from utils.updater import check_for_updates
 from pathlib import Path
-from data.robrun_profile import load_robrun_profile
+from data.robrun_profile import find_saved_context, load_robrun_profile
 
 APP_ROOT = Path(__file__).resolve().parent
 
@@ -75,10 +75,15 @@ async def run_session(config: dict):
         model_dir=str(profile.active_dir) if profile else None,
         neural_net=profile.network if profile else None,
     )
+    saved_context = config.get('saved_context') if manual else None
+    if saved_context:
+        engine.saved_context = saved_context.numbers
+        console.print(f"[cyan]Fast Start loaded {len(saved_context.numbers)} saved results from {saved_context.source}.[/cyan]")
     if profile:
-        engine.history = profile.recent_context()
+        if not saved_context:
+            engine.history = profile.recent_context()
         console.print(f"[cyan]ROB RUN trained model loaded; {len(profile.history)} archived training results.[/cyan]")
-        if not engine.history:
+        if not engine.history and not saved_context:
             console.print("[dim]Archived results are over 60 seconds old. Enter 15 new consecutive results to establish current context.[/dim]")
 
     # Manual mode needs stdin so can't use alt-screen Live — use legacy scroll display
@@ -137,7 +142,7 @@ def main():
     check_for_updates()
 
     try:
-        config = run_menu(robrun_profile=profile)
+        config = run_menu(robrun_profile=profile, saved_context=find_saved_context(APP_ROOT, profile))
         if profile and (config.get("manual_mode") or config.get('use_live')):
             config["robrun_profile"] = profile
     except KeyboardInterrupt:

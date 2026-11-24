@@ -1,10 +1,13 @@
 """Load a private local ROB RUN training archive for the interactive app."""
+from collections import deque
 from dataclasses import dataclass, field
 import datetime as dt
 import hashlib
 import json
 from pathlib import Path
 import shutil
+
+from config.settings import SEQUENCE_LENGTH
 
 
 def sha256(path):
@@ -28,6 +31,56 @@ def timestamp(value):
     if result.utcoffset() is None:
         raise ValueError('ROB RUN timestamp must include a timezone')
     return result
+
+
+@dataclass(frozen=True)
+class SavedContext:
+    numbers: tuple[int, ...]
+    last_result_utc: str
+    source: str
+
+
+def find_saved_context(root, profile=None):
+    """Select the newest complete sequence, independently of its age or model weights."""
+    private = Path(root) / 'data_store/robrun'
+    choices = []
+    if profile and len(profile.history) >= SEQUENCE_LENGTH:
+        choices.append((timestamp(profile.last_result_utc), None, profile.history[-SEQUENCE_LENGTH:],
+                        profile.last_result_utc, 'training archive'))
+    for manifest in private.glob('*/streaks-60s/status.json'):
+        try:
+            streaks = read_json(manifest)['streaks']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if not isinstance(streaks, list):
+            continue
+        for streak in streaks:
+            try:
+                length, identifier = streak['length'], streak['id']
+                if type(length) is not int or length < SEQUENCE_LENGTH or type(identifier) is not int or identifier < 1:
+                    continue
+                last_result = streak['last_result_utc']
+                choices.append((timestamp(last_result), manifest.parent / f'streak_{identifier:05d}.txt', length,
+                                last_result, f'{manifest.parents[1].name}, streak {identifier}'))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                continue
+
+    for _, path, values, last_result, source in sorted(choices, key=lambda choice: choice[0], reverse=True):
+        if path is None:
+            return SavedContext(tuple(values), last_result, source)
+        try:
+            with path.open(encoding='utf-8') as stream:
+                # The manifest can be read while the writer is appending the next round.
+                numbers = deque(maxlen=SEQUENCE_LENGTH)
+                for _ in range(values):
+                    number = int(next(stream))
+                    if not 0 <= number <= 36:
+                        raise ValueError('Invalid stored roulette number')
+                    numbers.append(number)
+        except (OSError, ValueError, StopIteration):
+            continue
+        return SavedContext(tuple(numbers), last_result, source)
+    return None
 
 
 @dataclass

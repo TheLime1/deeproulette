@@ -111,6 +111,8 @@ def render_bet_advice(advice: dict):
     total_bet     = sum(bets.values())
     qa_live = advice.get("qa_live")
     balance_label = "Virtual balance if played" if qa_live else "Balance after bet"
+    if advice.get('uses_saved_context'):
+        console.print('[dim]Fast Start suggestion uses saved history while current results build up.[/dim]')
 
     # Compact display for labelled outside / fusion / hybrid bets
     if bet_label:

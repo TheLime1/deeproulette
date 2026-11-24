@@ -200,6 +200,27 @@ class EngineCausalityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.tracker.history[0]["predicted"], [15])
         self.assertEqual(engine.history, list(range(16)))
 
+    async def test_saved_context_gives_immediate_advice_and_stays_out_of_training(self):
+        engine = self.make_engine(auto_train=True, use_live=True)
+        engine.saved_context = (36,) * 15
+        advice = []
+        engine.on_advice = advice.append
+        await engine.show_advice()
+        self.assertTrue(advice[-1]['uses_saved_context'])
+        self.assertEqual(engine.nn.model.inputs[-1], (36,) * 15)
+        self.assertEqual(engine.history, [])
+        self.assertIsNone(engine._pending_history)
+        await engine.handle_spin(0)
+        await engine.show_advice()
+        self.assertEqual(engine.nn.model.inputs[-1], (36,) * 14 + (0,))
+        for number in range(1, 15):
+            await engine.handle_spin(number)
+        self.assertFalse(advice[-1]['uses_saved_context'])
+        self.assertEqual(engine.tracker.total_spins, 0)
+        for number in range(15, 20):
+            await engine.handle_spin(number)
+        self.assertEqual(engine.trainer.online_inputs[0][0], tuple(range(20)))
+
     async def test_displayed_pending_prediction_is_reused_for_its_next_result(self):
         engine = self.make_engine(use_live=True)
         advice = []

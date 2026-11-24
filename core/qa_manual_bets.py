@@ -47,6 +47,9 @@ class ManualBetLog:
     def round_id(self):
         return self.anchor['round_id'] if self.anchor else None
 
+    def open_fast_start(self, at):
+        self.anchor = {'round_id': 'fast-start', 'observed_at': at, 'source_id': None}
+
     def record(self, command, round_id, entered_at=None):
         if self.anchor is None or round_id != self.round_id:
             self.emit('Bet entry discarded because the displayed round changed or closed. Wait for the next result.')
@@ -81,7 +84,8 @@ class ManualBetLog:
             entry.update(result_round_id=result['round_id'], result_received_utc=result['observed_at'],
                          result=result['number'], result_quality=result['quality'])
             gap = (received - stamp(opened_at)).total_seconds()
-            if result['source_id'] != self.anchor['source_id'] or not 0 < gap < self.timeout_seconds:
+            source = self.anchor['source_id']
+            if (source is not None and result['source_id'] != source) or not 0 < gap < self.timeout_seconds:
                 reason = 'result gap'
             elif any(stamp(bet['entered_utc']) >= received for bet in self.bets):
                 reason = 'entry reached the app after result receipt'

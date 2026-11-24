@@ -145,10 +145,10 @@ class RobrunFeed:
     def __init__(self,path,*,allow_candidates=False,since=None,start_at_end=False,poll_interval=0.1,
                  cadence_seconds=43.0,gap_tolerance_seconds=2.0,max_lateness_seconds=60.0,
                  rotation_files=4,max_read_bytes=65536,max_line_bytes=262144,max_rounds=4096,
-                 accept_single_numeric_reading=False):
+                 accept_single_numeric_reading=False,allow_expired_candidates=False):
         raw=os.fspath(path)
         if raw.startswith(('\\\\','//')) or '://' in raw:raise ValueError('A local journal path is required')
-        if any(type(flag) is not bool for flag in (allow_candidates,start_at_end,accept_single_numeric_reading)):
+        if any(type(flag) is not bool for flag in (allow_candidates,start_at_end,accept_single_numeric_reading,allow_expired_candidates)):
             raise ValueError('Feed flags must be boolean')
         for value,minimum,maximum in ((rotation_files,1,16),(max_read_bytes,1024,1048576),(max_line_bytes,1024,4194304),(max_rounds,1,100000)):
             if type(value) is not int or not minimum<=value<=maximum:raise ValueError('Invalid local feed bound')
@@ -156,6 +156,7 @@ class RobrunFeed:
             if type(value) not in (int,float) or not minimum<=value<=maximum:raise ValueError('Invalid feed timing')
         self.path=Path(raw).absolute();self.allow_candidates=allow_candidates
         self.accept_single_numeric_reading = accept_single_numeric_reading
+        self.allow_expired_candidates = allow_expired_candidates
         self.since=_utc(since) if since is not None else None
         if since is not None and self.since is None:raise ValueError('since must be a timezone-aware ISO timestamp')
         self.poll_interval=float(poll_interval);self.cadence_us=round(cadence_seconds*1000000)
@@ -197,6 +198,8 @@ class RobrunFeed:
              'observed_at':context.get('observed_at'),'phaseEndUtc':context.get('phaseEndUtc'),
              'quality':context.get('quality'),'phase':context.get('phase'),
              'source_id':context.get('source_id'),'round_id':context.get('round_id')}
+        if context.get('phase_expired_at_decode'):
+            row['phase_expired_at_decode'] = True
         await self._call(self._observations,row)
 
     async def _reset(self,reason,context=None):
@@ -230,6 +233,7 @@ class RobrunFeed:
         context={'number':number,'phase':phase,'quality':kind,
                  'observed_at':observed.isoformat() if observed else None,
                  'phaseEndUtc':deadline.isoformat() if deadline else None,
+                 'phase_expired_at_decode':event.get('phaseExpiredAtDecode') is True,
                  'source_id':self._token(source) if source else None,
                  'round_id':self._token((source,deadline_us)) if source and deadline else None}
         await self._observe('received',context=context)
@@ -274,7 +278,8 @@ class RobrunFeed:
         if not trusted:reason='unverified_final_result';self.counters['unverified_rejected']+=1
         elif not valid_number:reason='invalid_number';self.counters['invalid']+=1
         elif not admissible_reading:reason='ambiguous_round';self.counters['ambiguous']+=1
-        elif kind=='unverified_candidate' and event.get('phaseExpiredAtDecode') is True or observed is not None and _microseconds(observed)-deadline_us>self.lateness_us:
+        elif ((kind=='unverified_candidate' and context['phase_expired_at_decode'] and not self.allow_expired_candidates)
+              or _microseconds(observed)-deadline_us>self.lateness_us):
             reason='late_round';self.counters['late']+=1
         if reason:
             self._remember(key,None);self._advance(source,deadline_us)
