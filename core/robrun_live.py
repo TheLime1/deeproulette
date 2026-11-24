@@ -32,11 +32,12 @@ def capture_summary(snapshot, counters):
 
 
 class LivePipeline:
-    def __init__(self, folder, engine, emit=print):
+    def __init__(self, folder, engine, emit=print, display=None):
         self.folder=Path(folder)
         self.journal=RunJournal(self.folder)
         self.engine=engine
         self.emit=emit
+        self.display = display
         self.pending=[]
         self.lock=asyncio.Lock()
         self.streaks=StreakRecorder(self.folder/'streaks-60s',60,on_feed=self.pending.append)
@@ -46,6 +47,8 @@ class LivePipeline:
         self.journal.status.update(mode='robrun_qa_live',quality='unverified_candidate',training_updates=0)
         self.engine.on_spin_complete=self.scored
         self.engine.on_advice=self.advice
+        if self.display:
+            self.engine.on_waiting = self.display.waiting
 
     async def drain(self):
         rows=list(self.pending)
@@ -69,18 +72,26 @@ class LivePipeline:
                        'phase':row['phase'],'alternativesInMessage':1,
                        'final':row['quality']=='verified_final_result',
                        'fieldIdentityVerified':row['quality']=='verified_final_result'}
+                previous_streak = self.streaks.active
                 self.streaks.accept(event)
                 active=self.streaks.active
-                self.emit(f"[{row['observed_at']}] RESULT: {result_label(row['number'])}")
-                self.emit(f"  Phase: {row['phase'] or 'unknown'} | streak #{active['id']}: "
-                          f"{active['length']} {'entry' if active['length'] == 1 else 'entries'} | saved to session log")
-                self.manual_bets.observe(row)
+                if not self.display:
+                    self.emit(f"[{row['observed_at']}] RESULT: {result_label(row['number'])}")
+                    self.emit(f"  Phase: {row['phase'] or 'unknown'} | streak #{active['id']}: "
+                              f"{active['length']} {'entry' if active['length'] == 1 else 'entries'} | saved to session log")
+                closed_bets = self.manual_bets.observe(row)
+                if self.display:
+                    if previous_streak is not active:
+                        self.display.reset_advice()
+                    self.display.result(row, closed_bets, active)
                 if active['length'] == 1:
                     self.emit('  Model history: waiting for a second result within 60 seconds.')
                 self.journal.status.update(last_number=row['number'],last_observation_utc=row['observed_at'])
             elif row['status']=='reset':
                 self.streaks.accept({'kind':'journal_gap'})
                 self.manual_bets.close(reason=(row.get('reason') or 'source gap').replace('_', ' '))
+                if self.display:
+                    self.display.reset_advice()
                 # Even an unqualified singleton can leave pending context from a
                 # previous model run; explicit reset barriers always clear it.
                 await self.engine.reset_history(row.get('reason'))
@@ -105,6 +116,8 @@ class LivePipeline:
             now = now or dt.datetime.now(dt.timezone.utc)
             self.streaks.expire(now)
             self.manual_bets.expire(now)
+            if self.display and self.streaks.active is None:
+                self.display.reset_advice()
             await self.drain()
             self.streaks.publish()
             self.journal.status.update(updated_utc=utcnow(),contiguous_history=len(self.engine.history),
@@ -119,8 +132,10 @@ class LivePipeline:
         self.journal.append('rankings.jsonl',{'generated_utc':self.forecast_utc,'ranking':ranking,'suggested_selection':selection,
             'after_result_received_utc':self.current['receivedUtc'],'trained_checkpoint':self.engine.nn.is_trained(),
             'quality':'unverified_candidate','wager_amount':0})
-        self.emit(f'NEXT ROUND SUGGESTION: {selection}')
-        self.emit('  Place bets in the game if you choose. Enter your actual bet here or leave it blank to skip.')
+        if self.display:
+            self.display.show_advice(result)
+        else:
+            self.emit(f'NEXT ROUND SUGGESTION: {selection}')
 
     def scored(self,result):
         mode=score_mode(self.current['receivedUtc'],self.forecast_utc)
@@ -133,6 +148,7 @@ class LivePipeline:
 async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0):
     from core.engine import PredictionEngine
     from strategies.base import BaseStrategy
+    from ui.qa_round_display import QARoundDisplay
     root=Path(root)
     strategy=config['strategy_cls']()
     class ResearchStrategy(BaseStrategy):
@@ -153,13 +169,15 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
         model_dir=str(profile.active_dir if profile else folder/'models'),neural_net=profile.network if profile else None)
     # Live always starts a new current stream; archived training data is not replayed.
     keyboard = BetInput()
-    pipeline=LivePipeline(folder,engine,emit=keyboard.emit)
+    display = QARoundDisplay(strategy, config['balance'], config['bet_per_number'], keyboard)
+    pipeline=LivePipeline(folder,engine,emit=keyboard.emit,display=display)
     feed=RobrunFeed(events,allow_candidates=True,since=since,poll_interval=.02,accept_single_numeric_reading=True)
     feed.on_observation(pipeline.observation)
     runtime=runtime_factory(root,capture_folder)
     pipeline.journal.status.update(state='starting',capture_directory=str(capture_folder),
                                   online_training_enabled=config['auto_train'])
     pipeline.journal.publish()
+    display.start(config['auto_train'])
     print(f'ROB RUN QA LIVE | model: {"saved ROB RUN profile" if profile else "fresh untrained"}',flush=True)
     print('60-second streak timeout. A single numeric reading counts. Conflicting numbers close the streak.',flush=True)
     print(f'Suggestions start after {SEQUENCE_LENGTH} consecutive results. {BET_HELP}', flush=True)
@@ -176,9 +194,9 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
             keyboard.poll(pipeline.manual_bets)
             await feed.poll_once()
             now=asyncio.get_running_loop().time()
-            phase = snapshot.get('phase')
+            phase = snapshot.get('phase') or previous_phase
             if phase != previous_phase or now - last_report >= 15:
-                keyboard.emit(capture_summary(snapshot, feed.counters))
+                keyboard.emit(capture_summary({**snapshot, 'phase': phase}, feed.counters))
                 previous_phase = phase
                 last_report = now
             if now-last_tick>=.5:
@@ -200,5 +218,6 @@ async def run_qa_live(root,config,*,runtime_factory=CaptureRuntime,max_seconds=0
         if engine.training_updates:engine.nn.save()
         pipeline.journal.status.update(updated_utc=utcnow(),feed_counts=dict(feed.counters),training_updates=engine.training_updates)
         pipeline.journal.publish()
+        display.finish()
         print(f'QA Live stopped; data saved in {folder}',flush=True)
     return folder

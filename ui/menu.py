@@ -327,7 +327,8 @@ def show_confirmation(strategy_cls, balance: float, bet_amount: float, use_live:
         padding=(0, 2),
     ))
     console.print()
-    Confirm.ask("[bold]Press Enter to launch[/bold]", default=True)
+    if not Confirm.ask("[bold]Press Enter to launch[/bold]", default=True):
+        raise KeyboardInterrupt
 
 
 def run_menu(robrun_profile=None) -> dict:
@@ -347,16 +348,6 @@ def run_menu(robrun_profile=None) -> dict:
 
     strategy_cls                       = ask_strategy()
     use_live, manual_mode, file_train  = ask_mode()
-
-    if use_live:
-        auto_train=ask_auto_train()
-        console.print(Panel('ROB RUN QA Live collects results and shows the next-round suggestion after 15 consecutive results.\n'
-                            'Place bets in the game. Log what you played here, or leave it blank to skip.\n'
-                            'Ctrl+C stops capture and saves the session.',border_style='cyan'))
-        if not Confirm.ask('Start ROB RUN QA Live?',default=True):
-            raise KeyboardInterrupt
-        return {'strategy_cls':strategy_cls,'balance':1.0,'bet_per_number':0.0,'use_live':True,
-                'manual_mode':False,'file_train':False,'auto_train':auto_train,'spin_interval':0}
 
     if file_train:
         # File training only needs the strategy — no balance/bet/speed prompts

@@ -8,9 +8,12 @@ class BetInput:
         self.round_id = None
 
     def emit(self, message):
+        self.render(print, message, flush=True)
+
+    def render(self, display, *args, **kwargs):
         if self.draft:
             print()
-        print(message, flush=True)
+        display(*args, **kwargs)
         if self.draft:
             print(f'> {self.draft}', end='', flush=True)
 

@@ -1,6 +1,7 @@
 """Journal bets the user reports placing in the game."""
 from decimal import Decimal, InvalidOperation
 
+from config.settings import PAYOUT_RATIO
 from robrun import utcnow
 from streaks import stamp
 
@@ -17,9 +18,9 @@ def parse_bet(command):
     selection = ' '.join(parts[1:-1])
     if selection.isascii() and selection.isdecimal() and 0 <= int(selection) <= 36:
         selection = str(int(selection))
-        pockets = [int(selection)]
+        pockets, payout = [int(selection)], PAYOUT_RATIO
     else:
-        for label, (numbers, _) in OUTSIDE_CATEGORIES.items():
+        for label, (numbers, payout) in OUTSIDE_CATEGORIES.items():
             if selection.casefold() == label.casefold():
                 selection, pockets = label, sorted(numbers)
                 break
@@ -29,9 +30,9 @@ def parse_bet(command):
         amount = Decimal(parts[-1])
     except InvalidOperation as error:
         raise ValueError('Enter a positive stake in game units.') from error
-    if not amount.is_finite() or amount <= 0:
-        raise ValueError('Enter a positive stake in game units.')
-    return {'selection': selection, 'amount': str(amount), 'pockets': pockets}
+    if not amount.is_finite() or not 0 < amount <= 10**15:
+        raise ValueError('Enter a positive stake of up to 1 quadrillion game units.')
+    return {'selection': selection, 'amount': str(amount), 'pockets': pockets, 'payout': payout}
 
 
 class ManualBetLog:
@@ -98,10 +99,12 @@ class ManualBetLog:
         self.anchor = None
         self.bets = []
         self.emit(message)
+        return entry
 
     def observe(self, row):
-        self.close(result=row)
+        closed = self.close(result=row)
         self.anchor = row
+        return closed
 
     def expire(self, now):
         if self.anchor and (now - stamp(self.anchor['observed_at'])).total_seconds() >= self.timeout_seconds:

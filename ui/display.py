@@ -1,6 +1,6 @@
 # Copyright 2026 alaevate
 # Licensed under the Apache License, Version 2.0
-"""Legacy scroll-based display — used only for manual mode (stdin blocks alt-screen)."""
+"""Scrolling display shared by Manual Entry and ROB RUN QA Live."""
 
 from rich.console import Console
 from rich.table import Table
@@ -37,13 +37,18 @@ def render_spin(spin_data: dict):
     streak_k, streak_v = spin_data["streak"]
     saved     = spin_data.get("model_saved", False)
     bet_label = spin_data.get("bet_label")
+    qa_status = spin_data.get("qa_status")
 
     color   = get_number_color(n)
     emoji   = _NUMBER_EMOJI[color]
 
     # Outcome
-    outcome_color = "bold green" if is_win else "bold red"
-    outcome_text  = "✨ WIN " if is_win else "❌ LOSS"
+    if qa_status in ("skipped", "unresolved", "no_bet"):
+        outcome_color = "dim"
+        outcome_text = {"skipped": "SKIPPED", "unresolved": "UNRESOLVED", "no_bet": "NO BET LOGGED"}[qa_status]
+    else:
+        outcome_color = "bold green" if is_win else "bold red"
+        outcome_text = "✨ WIN " if is_win else "❌ LOSS"
     net_str       = f"[{outcome_color}]{net:+.2f}[/{outcome_color}]"
 
     # Streak badge
@@ -58,12 +63,15 @@ def render_spin(spin_data: dict):
         f"[dim]Spin #{spin_num}  ◄ RESULT ►[/dim]",
         style="dim",
     )
+    if receipt := spin_data.get("received_at"):
+        console.print(f"  [dim]{receipt}  │  Phase: {spin_data['phase']}  │  "
+                      f"Streak #{spin_data['qa_streak']}: {spin_data['qa_length']} spins[/dim]")
 
     # Main result line
     console.print(
         f"  {emoji} [bold white]{n:>2}[/bold white]  "
         f"[{outcome_color}]{outcome_text}[/{outcome_color}]  {net_str}"
-        f"  │  Balance: [bold yellow]${balance:>8.2f}[/bold yellow]"
+        f"  │  {'Virtual balance' if qa_status else 'Balance'}: [bold yellow]${balance:>8.2f}[/bold yellow]"
         f"  │  Win Rate: [cyan]{win_rate:>5.1f}%[/cyan]"
         f"  │  ROI: [{roi_color}]{roi:>+6.1f}%[/{roi_color}]"
         f"  │  Streak: {streak_badge}"
@@ -75,7 +83,7 @@ def render_spin(spin_data: dict):
     saved_tag = "  [dim]💾 saved[/dim]" if saved else ""
     if bet_label:
         console.print(f"  🔮 AI picked: [bold cyan]{bet_label}[/bold cyan]  │  {hit_str}{saved_tag}")
-    else:
+    elif predicted:
         pred_display = ", ".join(str(p) for p in predicted[:8])
         if len(predicted) > 8:
             pred_display += f"  (+{len(predicted) - 8} more)"
@@ -101,6 +109,8 @@ def render_bet_advice(advice: dict):
     spin_num      = advice.get("spin_num", "?")
     bet_label     = advice.get("bet_label")
     total_bet     = sum(bets.values())
+    qa_live = advice.get("qa_live")
+    balance_label = "Virtual balance if played" if qa_live else "Balance after bet"
 
     # Compact display for labelled outside / fusion / hybrid bets
     if bet_label:
@@ -109,7 +119,7 @@ def render_bet_advice(advice: dict):
         console.print(
             f"  🎲  Bet: [bold cyan]{bet_label}[/bold cyan]"
             f"  │  Amount: [bold yellow]${total_bet:.2f}[/bold yellow]"
-            f"  │  Balance after: [yellow]${balance - total_bet:.2f}[/yellow]"
+            f"  │  {balance_label}: [yellow]${balance - total_bet:.2f}[/yellow]"
         )
         console.print()
         return
@@ -139,7 +149,8 @@ def render_bet_advice(advice: dict):
     table.add_column("Number",           justify="center", width=col_num,   no_wrap=True)
     table.add_column("Color",            justify="center", width=col_color, no_wrap=True)
     table.add_column("Bet Amount",       justify="center", width=col_bet,   no_wrap=True)
-    table.add_column("AI Probability",   justify="center", width=col_prob,  no_wrap=True)
+    table.add_column("Model Score" if qa_live else "AI Probability",
+                     justify="center", width=col_prob, no_wrap=True)
 
     for num in sorted(predicted):
         color    = get_number_color(num)
@@ -158,15 +169,15 @@ def render_bet_advice(advice: dict):
     console.print()
     console.print(table, justify="center")
     console.print(
-        f"{pad}💰  Total bet: [bold yellow]${total_bet:.2f}[/bold yellow]"
-        f"  │  Balance after bet: [yellow]${balance - total_bet:.2f}[/yellow]"
+        f"{pad}💰  {'Suggested total' if qa_live else 'Total bet'}: [bold yellow]${total_bet:.2f}[/bold yellow]"
+        f"  │  {balance_label}: [yellow]${balance - total_bet:.2f}[/yellow]"
     )
 def render_session_header(strategy, balance: float, use_live: bool, auto_train: bool, manual_mode: bool = False):
     """Print a header panel when the session starts."""
     if manual_mode:
         mode_label = "[magenta]✍️  Manual Entry[/magenta]"
     elif use_live:
-        mode_label = "[cyan]🌐 Live Casino[/cyan]"
+        mode_label = "[cyan]🌐 ROB RUN QA Live[/cyan]"
     else:
         mode_label = "[yellow]🔄 Simulation[/yellow]"
     train_label = "[green]On[/green]" if auto_train else "[dim]Off[/dim]"
@@ -229,13 +240,15 @@ def render_balance_empty():
         "[bold red]⚠  Balance depleted — session ended automatically.[/bold red]",
         border_style="red",
     ))
-def render_session_summary(tracker, strategy, initial_balance: float):
+def render_session_summary(tracker, strategy, initial_balance: float, *, qa_rounds=None):
     """Print a formatted table summarising the completed session."""
     console.print()
 
     if tracker.total_spins == 0:
+        empty_message = (f"Collected {qa_rounds} results. No logged bets were settled."
+                         if qa_rounds is not None else "No spins were recorded this session.")
         console.print(Panel(
-            "[dim]No spins were recorded this session.[/dim]",
+            f"[dim]{empty_message}[/dim]",
             border_style="dim",
         ))
         return
@@ -258,7 +271,9 @@ def render_session_summary(tracker, strategy, initial_balance: float):
     table.add_column("Value", justify="right", min_width=16)
 
     table.add_row("Strategy",       strategy.STRATEGY_NAME)
-    table.add_row("Total Spins",    str(tracker.total_spins))
+    if qa_rounds is not None:
+        table.add_row("Collected Results", str(qa_rounds))
+    table.add_row("Logged Bet Rounds" if qa_rounds is not None else "Total Spins", str(tracker.total_spins))
     table.add_row("Wins",           f"[green]{tracker.total_wins}[/green]")
     table.add_row("Losses",         f"[red]{tracker.total_losses}[/red]")
     table.add_row("Win Rate",       f"[cyan]{tracker.win_rate:.2f}%[/cyan]")
