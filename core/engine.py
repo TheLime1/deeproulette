@@ -101,9 +101,13 @@ class PredictionEngine:
         if not self._running:
             return
 
-        # The current result is a target, never an input to its own prediction.
-        # The first SEQUENCE_LENGTH observations only establish past context.
-        if len(self.history) < SEQUENCE_LENGTH:
+        pending_matches = (self._pending_predicted is not None
+                           and self._pending_history == tuple(self.history[-SEQUENCE_LENGTH:]))
+        warming_up = len(self.history) < SEQUENCE_LENGTH
+        # Manual Entry can settle advice already displayed with Fast Start inputs.
+        # Live evaluation begins once there is a full window of current results.
+        settles_fast_start = warming_up and self.manual_mode and pending_matches
+        if warming_up and not settles_fast_start:
             self._append_history(number)
             if self.on_waiting and self.use_live:
                 self.on_waiting(len(self.history), SEQUENCE_LENGTH)
@@ -111,8 +115,7 @@ class PredictionEngine:
                 await self.show_advice()
             return
 
-        if (self._pending_predicted is not None
-                and self._pending_history == tuple(self.history[-SEQUENCE_LENGTH:])):
+        if pending_matches:
             # Reuse prediction from show_advice() so the user sees the same numbers
             predicted               = self._pending_predicted
             bets = self._pending_bets
@@ -168,6 +171,7 @@ class PredictionEngine:
                 "spin_num":      self.tracker.total_spins,
                 "streak":        self.tracker.streak(),
                 "model_saved":   model_saved,
+                "uses_saved_context": settles_fast_start,
                 "probabilities": probabilities,
                 "bet_label":     self.strategy.get_display_label(),
                 "total_wins":    self.tracker.total_wins,
@@ -237,7 +241,7 @@ class PredictionEngine:
         predicted = self.strategy.select_numbers(probabilities)
         bets = self.strategy.calculate_bets(predicted, self.balance, self.bet_per_number)
 
-        if uses_saved_context:
+        if uses_saved_context and not self.manual_mode:
             self._clear_pending()
         else:
             self._pending_predicted = predicted

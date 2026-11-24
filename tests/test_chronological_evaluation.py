@@ -221,6 +221,27 @@ class EngineCausalityTests(unittest.IsolatedAsyncioTestCase):
             await engine.handle_spin(number)
         self.assertEqual(engine.trainer.online_inputs[0][0], tuple(range(20)))
 
+    async def test_manual_fast_start_settles_displayed_suggestions_from_spin_one(self):
+        engine = self.make_engine(manual_mode=True, use_live=False, auto_train=True)
+        engine.saved_context = (36,) * 15
+        advice, results = [], []
+        engine.on_advice = advice.append
+        engine.on_spin_complete = results.append
+
+        await engine.show_advice()
+        await engine.handle_spin(4)
+        await engine.show_advice()
+        await engine.handle_spin(5)
+        await engine.show_advice()
+
+        self.assertEqual([row['spin_num'] for row in advice], [1, 2, 3])
+        self.assertEqual([row['number'] for row in results], [4, 5])
+        self.assertEqual([row['is_win'] for row in results], [False, True])
+        self.assertEqual([row['balance'] for row in results], [999.0, 1034.0])
+        self.assertTrue(all(row['uses_saved_context'] for row in results))
+        self.assertEqual(engine.history, [4, 5])
+        self.assertEqual(engine.training_updates, 0)
+
     async def test_displayed_pending_prediction_is_reused_for_its_next_result(self):
         engine = self.make_engine(use_live=True)
         advice = []

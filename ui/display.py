@@ -81,6 +81,8 @@ def render_spin(spin_data: dict):
     hit     = n in predicted
     hit_str = "[bold green]✓ Hit![/bold green]" if hit else "[dim]✕ Miss[/dim]"
     saved_tag = "  [dim]💾 saved[/dim]" if saved else ""
+    if spin_data.get("uses_saved_context"):
+        saved_tag += "  [dim]Fast Start paper result[/dim]"
     if bet_label:
         console.print(f"  🔮 AI picked: [bold cyan]{bet_label}[/bold cyan]  │  {hit_str}{saved_tag}")
     elif predicted:
